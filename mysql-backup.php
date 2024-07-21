@@ -48,7 +48,7 @@ function getMysqlDbInstance(): PDO
  * @param bool $fullBackup
  * @return void
  */
-function mysqlDump(string $backupDir, bool $fullBackup = false, bool $skipFullBackupUnReady = false)
+function mysqlDump(string $backupDir, bool $fullBackup = false, bool $skipFullBackupUnReady = false, array $dumpExtra = [])
 {
     // get mysql version
     $db = getMysqlDbInstance();
@@ -95,11 +95,12 @@ function mysqlDump(string $backupDir, bool $fullBackup = false, bool $skipFullBa
         }
 
         $command = sprintf(
-            "mysqldump -u%s -p%s -h%s -P%s --output-as-version=SERVER --set-gtid-purged=AUTO --single-transaction --quick --source-data=2 --all-databases > %s",
+            "mysqldump -u%s -p%s -h%s -P%s --output-as-version=SERVER --single-transaction --quick --source-data=2 --all-databases %s > %s",
             MYSQL_USER,
             MYSQL_PASSWORD,
             MYSQL_HOST,
             MYSQL_PORT,
+            implode(' ', $dumpExtra),
             $backupFile
         );
 
@@ -366,6 +367,7 @@ function dumpHelp() {
             "mysqlsh": create backup with mysql shell.
         --skip-full-unready <option> skip when full backup uncompleted. new archive dir is empty.
             only work with action=inc-archive or inc
+        --set-gtid-purged <option> set gtid_purged when full backup. default: AUTO.
         --user <mysql user> or Env: MYSQL_USER, *required
         --password <mysql password> or Env: MYSQL_PASSWORD, *required
         --port <mysql password> or Env MYSQL_PORT, default 3306
@@ -384,6 +386,7 @@ $options = getopt('', [
     'password:',
     'port:',
     'host:',
+    'set-gtid-purged:',
     "skip-full-unready",
     'help'
 ]);
@@ -465,10 +468,15 @@ if ($mode === 'dump') {
     }
 
     if (str_starts_with($action, 'full')) {
-        mysqlDump($dir, true);
+        $setGtid = !empty($options['set-gtid-purged']) ? $options['set-gtid-purged'] : 'AUTO';
+        mysqlDump($dir, true, false, ["--set-gtid-purged=$setGtid"]);
     }
     elseif (str_starts_with($action, 'inc')) {
-        mysqlDump($dir, false);
+        mysqlDump(
+            $dir,
+            false,
+            isset($options['skip-full-unready'])
+        );
     }
     else {
         recoverMysqlDump($dir);
