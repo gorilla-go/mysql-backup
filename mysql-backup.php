@@ -350,6 +350,71 @@ function recoverMysqlDump(string $backupDir)
     print("✅ Recover success!\n");
 }
 
+/**
+ * backup mysql by mysqlsh
+ *
+ * @return void
+ */
+function mysqlShellDump(string $backupDir, bool $primary = false) 
+{
+    $backupDir = rtrim($backupDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+    $user = MYSQL_USER;
+    $password = MYSQL_PASSWORD;
+    $host = MYSQL_HOST;
+    $port = MYSQL_PORT;
+
+    // clear dir.
+    foreach(glob($backupDir . '*') ?: [] as $item) {
+        if (is_dir($item)) {
+            rmdir($item);
+            continue;
+        }
+        unlink($item);
+    }
+
+    $nodeSelectStr = $primary ? '--redirect-primary' : '--redirect-secondary';
+    exec(
+        "mysqlsh --cluster $nodeSelectStr -h$host -u$user -p$password -P$port --js -e util.dumpInstance('$backupDir')",
+        $_,
+        $returnCode
+    );
+
+    if ((int) $returnCode !== 0 || !is_file($backupDir . '@.json')) {
+        print("❌ mysql shell backup failed. \n");
+        exit(1);
+    }
+
+    print("✅ mysql shell backup succeed. \n");
+    exit(0);
+}
+
+/**
+ * mysql shell dump recover.
+ * @return void
+ */
+function mysqlShellDumpRecover(string $backupDir, bool $resetProgress = false)
+{
+    $user = MYSQL_USER;
+    $password = MYSQL_PASSWORD;
+    $host = MYSQL_HOST;
+    $port = MYSQL_PORT;
+
+    $resetProgressStr = $resetProgress ? 'true' : 'false';
+    exec(
+        "mysqlsh --cluster --redirect-primary -h$host -u$user -p$password -P$port --js -e util.dumpInstance('$backupDir', {'resetProgress': $resetProgressStr})",
+        $_,
+        $returnCode
+    );
+
+    if ((int) $returnCode !== 0) {
+        print("❌ mysql shell backup recover failed. \n");
+        exit(1);
+    }
+
+    print("✅ mysql shell recover succeed. \n");
+    exit(0);
+}
+
 function dumpHelp() {
     printf(<<<EOL
     Usage:
@@ -366,8 +431,11 @@ function dumpHelp() {
             "dump": create backup with mysqldump. default.
             "mysqlsh": create backup with mysql shell.
         --skip-full-unready <option> skip when full backup uncompleted. new archive dir is empty.
-            only work with action=inc-archive or inc
-        --set-gtid-purged <option> set gtid_purged when full backup. default: AUTO.
+            only work with action=inc-archive or inc, work with mode=dump
+        --set-gtid-purged <option> set gtid_purged when full backup. default: OFF.
+            work with mode=dump
+        --redirect-primary <option> switch to primary node in cluster. work with mode=mysqlsh
+        --reset-progress <option> reset recover progress. work with mode=mysqlsh
         --user <mysql user> or Env: MYSQL_USER, *required
         --password <mysql password> or Env: MYSQL_PASSWORD, *required
         --port <mysql password> or Env MYSQL_PORT, default 3306
@@ -387,6 +455,8 @@ $options = getopt('', [
     'port:',
     'host:',
     'set-gtid-purged:',
+    'redirect-primary',
+    'reset-progress',
     "skip-full-unready",
     'help'
 ]);
@@ -440,13 +510,12 @@ if (!$dir || !is_dir($dir)) {
     dumpHelp();
     exit(1);
 }
+$dir = rtrim($dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+if ($action === 'full-archive') {
+    $dir .= date('Ymd') . DIRECTORY_SEPARATOR;
+}
 
 if ($mode === 'dump') {
-    $dir = rtrim($dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
-    if ($action === 'full-archive') {
-        $dir .= date('Ymd') . DIRECTORY_SEPARATOR;
-    }
-
     if ($action === 'inc-archive') {
         $dirs = glob($dir . '*', GLOB_ONLYDIR) ?: [];
         rsort($dirs);
@@ -468,7 +537,7 @@ if ($mode === 'dump') {
     }
 
     if (str_starts_with($action, 'full')) {
-        $setGtid = !empty($options['set-gtid-purged']) ? $options['set-gtid-purged'] : 'AUTO';
+        $setGtid = !empty($options['set-gtid-purged']) ? $options['set-gtid-purged'] : 'OFF';
         mysqlDump($dir, true, false, ["--set-gtid-purged=$setGtid"]);
     }
     elseif (str_starts_with($action, 'inc')) {
@@ -481,5 +550,17 @@ if ($mode === 'dump') {
     else {
         recoverMysqlDump($dir);
     }
+
+    exit(0);
 }
 
+// mysqlsh mode.
+if ($mode === 'mysqlsh') {
+    if ($action === 'recover') {
+        mysqlShellDumpRecover($dir, isset($options['reset-progress']));
+        exit(0);
+    }
+
+    mysqlShellDump($dir, isset($options['redirect-primary']));
+    exit(0);
+}
