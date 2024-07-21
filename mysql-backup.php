@@ -1,13 +1,11 @@
 <?php
 
-const MYSQL_USER = 'root';
-const MYSQL_PASSWORD = 'root';
-const MYSQL_HOST = '127.0.0.1';
-const MYSQL_PORT = 3306;
 const BINLOG_FILENAME = 'binlog_index';
 const LOG_FILENAME = 'bak.log';
 const FULL_BACKUP_SUFFIX = 'full_backup';
 const INCREMENTAL_BACKUP_SUFFIX = 'inc_bak';
+const ACTION_DEFAULT = 'full';
+const MODE_DEFAULT = 'dump';
 
 /**
  * @var \PDO|null $dbInstance
@@ -30,7 +28,7 @@ function getMysqlDbInstance(): PDO
                 MYSQL_PASSWORD
             );
         } catch (\PDOException $e) {
-            print($e->getMessage());
+            print('❌ connect to mysql failed: ' . $e->getMessage());
             exit(1);
         }
 
@@ -44,12 +42,22 @@ function getMysqlDbInstance(): PDO
     return $dbInstance;
 }
 
-function backupMysql(string $backupDir, bool $fullBackup = false)
+/**
+ * mysqldump or inc dump
+ * @param string $backupDir
+ * @param bool $fullBackup
+ * @return void
+ */
+function mysqlDump(string $backupDir, bool $fullBackup = false, bool $skipFullBackupUnReady = false)
 {
     // get mysql version
     $db = getMysqlDbInstance();
     $stmt = $db->query('SELECT VERSION()');
     $version = $stmt->fetchColumn();
+    if (!$version) {
+        print("❌ Mysql connected fail.\n");
+    }
+
     $stmt->closeCursor();
     if (version_compare($version, '8.0.0', '<')) {
         print("❌ MySQL version $version is not supported, please use MySQL 8.0 or higher\n");
@@ -146,6 +154,11 @@ function backupMysql(string $backupDir, bool $fullBackup = false)
 
     // incremental backup
     if (!is_file($backupDir . BINLOG_FILENAME)) {
+        if ($skipFullBackupUnReady) {
+            print("⌛️ Skip full backup unready. later again.\n");
+            exit(0);
+        }
+
         print("❌ Could not find binlog file in backup file. please do full backup first.\n");
         exit(1);
     }
@@ -181,7 +194,7 @@ function backupMysql(string $backupDir, bool $fullBackup = false)
     $lastPosition = $lastPositionRow['Position'];
 
     if ((int) $lastPosition === (int) $binlogPosition && $lastBinlogFile === $binlogFile) {
-        print("😴 No new binlog file need to backup. do it later.\n");
+        print("⌛️ No binlog file need to backup. later again.\n");
         exit;
     }
 
@@ -279,7 +292,7 @@ function backupMysql(string $backupDir, bool $fullBackup = false)
  * @param string $backupDir
  * @return void
  */
-function recoverMysql(string $backupDir)
+function recoverMysqlDump(string $backupDir)
 {
     $backupDir = rtrim($backupDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
     $fileBackupFileSuffix = FULL_BACKUP_SUFFIX;
@@ -336,4 +349,129 @@ function recoverMysql(string $backupDir)
     print("✅ Recover success!\n");
 }
 
-backupMysql("/Users/yehua/Downloads/backup/", true);
+function dumpHelp() {
+    printf(<<<EOL
+    Usage:
+        --dir <target directory>, *required
+        --action <action> enum:
+            "full": create a backup file at this dir, default
+            "full-archive": create a sub archive file at this dir and backup in this. 
+                format as: dir/YmdHis/
+            "inc": create incremental backup file at this dir. unsupported when mode=mysqlsh
+            "inc-archive": search the latest full-archive dir to create incremental backup file.
+                unsupported when mode=mysqlsh
+            "recover": recover mysql from this dir.
+        --mode mysql backup mode. enum:
+            "dump": create backup with mysqldump. default.
+            "mysqlsh": create backup with mysql shell.
+        --skip-full-unready <option> skip when full backup uncompleted. new archive dir is empty.
+            only work with action=inc-archive or inc
+        --user <mysql user> or Env: MYSQL_USER, *required
+        --password <mysql password> or Env: MYSQL_PASSWORD, *required
+        --port <mysql password> or Env MYSQL_PORT, default 3306
+        --host <mysql password> or Env MYSQL_HOST, default localhost
+        --help
+
+    EOL);
+}
+
+// get php cli params
+$options = getopt('', [
+    'dir:', 
+    'action:',
+    'mode:',
+    'user:',
+    'password:',
+    'port:',
+    'host:',
+    "skip-full-unready",
+    'help'
+]);
+
+if (isset($options['help'])) {
+    dumpHelp();
+    exit(0);
+}
+
+$user = !empty($options['user']) ? $options['user'] : getenv('MYSQL_USER');
+if (!$user) {
+    print("❌ Missing mysql user.\n");
+    dumpHelp();
+    exit(1);
+}
+define('MYSQL_USER', $user);
+
+$password = !empty($options['password']) ? $options['password'] : getenv('MYSQL_PASSWORD');
+if (!$password) {
+    print("❌ Missing mysql password.\n");
+    dumpHelp();
+    exit(1);
+}
+define('MYSQL_PASSWORD', $password);
+
+$host = !empty($options['host']) ? $options['host'] : getenv('MYSQL_HOST');
+define('MYSQL_HOST', $host ?: 'localhost');
+
+$port = !empty($options['port']) ? $options['port'] : getenv('MYSQL_PORT');
+define('MYSQL_PORT', $port ?: 3306);
+
+$mode = $options['mode'] ?? MODE_DEFAULT;
+if (!in_array($mode, ['dump', 'mysqlsh'])) {
+    $mode = MODE_DEFAULT;
+}
+
+$action = $options['action'] ?? ACTION_DEFAULT;
+if (
+    !in_array($action, ['full', 'full-archive', 'inc', 'inc-archive', 'recover']) ||
+    (
+        $mode === 'mysqlsh' && 
+        in_array($action, ['inc', 'inc-archive'])
+    )
+) {
+    $action = ACTION_DEFAULT;
+}
+
+$dir = $options['dir'] ?? null;
+if (!$dir || !is_dir($dir)) {
+    printf("❌ Invalid backup directory: %s\n", $dir);
+    dumpHelp();
+    exit(1);
+}
+
+if ($mode === 'dump') {
+    $dir = rtrim($dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+    if ($action === 'full-archive') {
+        $dir .= date('YmdHis') . DIRECTORY_SEPARATOR;
+    }
+
+    if ($action === 'inc-archive') {
+        $dirs = glob($dir . '*', GLOB_ONLYDIR) ?: [];
+        rsort($dirs);
+        $foundArchive = false;
+        foreach ($dirs as $searchedDir) {
+            if (preg_match('/\d{14}/', basename($searchedDir))) {
+                $dir = $searchedDir . DIRECTORY_SEPARATOR;
+                $foundArchive = true;
+                break;
+            }
+        }
+
+        if (!$foundArchive) {
+            print("❌ Could not find archive dir in $dir\n");
+            exit(1);
+        }
+
+        print("🔍 Found archive dir in $dir\n");
+    }
+
+    if (str_starts_with($action, 'full')) {
+        mysqlDump($dir, true);
+    }
+    elseif (str_starts_with($action, 'inc')) {
+        mysqlDump($dir, false);
+    }
+    else {
+        recoverMysqlDump($dir);
+    }
+}
+
