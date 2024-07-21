@@ -356,7 +356,7 @@ function dumpHelp() {
         --action <action> enum:
             "full": create a backup file at this dir, default
             "full-archive": create a sub archive file at this dir and backup in this. 
-                format as: dir/YmdHis/
+                format as: dir/Ymd/
             "inc": create incremental backup file at this dir. unsupported when mode=mysqlsh
             "inc-archive": search the latest full-archive dir to create incremental backup file.
                 unsupported when mode=mysqlsh
@@ -441,7 +441,7 @@ if (!$dir || !is_dir($dir)) {
 if ($mode === 'dump') {
     $dir = rtrim($dir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
     if ($action === 'full-archive') {
-        $dir .= date('YmdHis') . DIRECTORY_SEPARATOR;
+        $dir .= date('Ymd') . DIRECTORY_SEPARATOR;
     }
 
     if ($action === 'inc-archive') {
