@@ -452,7 +452,7 @@ if ($mode === 'dump') {
         rsort($dirs);
         $foundArchive = false;
         foreach ($dirs as $searchedDir) {
-            if (preg_match('/\d{14}/', basename($searchedDir))) {
+            if (preg_match('/\d{8}/', basename($searchedDir))) {
                 $dir = $searchedDir . DIRECTORY_SEPARATOR;
                 $foundArchive = true;
                 break;
