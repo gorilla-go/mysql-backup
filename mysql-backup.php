@@ -1,5 +1,24 @@
 <?php
 
+/**
+ * example.
+ * 
+ * mysqldump full backup.
+ * php /mysql-backup.php --dir="/backup/" --action=full-archive --mode=dump --set-gtid-purged=OFF
+ * 
+ * mysqldump inc backup.
+ * php /mysql-backup.php --dir="/backup/" --action=inc-archive --mode=dump --skip-full-unready
+ * 
+ * mysqldump recover backup
+ * php /mysql-backup.php --dir="/backup/20240721" --action=recover
+ * 
+ * mysql shell full backup
+ * php /mysql-backup.php --dir="/backup/" --action=full-archive --mode=mysqlsh
+ * 
+ * mysql shell recover backup
+ * php /mysql-backup.php --dir="/backup/20240721/" --mode=mysqlsh --action=recover --reset-progress --redirect-primary
+ */
+
 const BINLOG_FILENAME = 'binlog_index';
 const LOG_FILENAME = 'bak.log';
 const FULL_BACKUP_SUFFIX = 'full_backup';
@@ -374,7 +393,7 @@ function mysqlShellDump(string $backupDir, bool $primary = false)
 
     $nodeSelectStr = $primary ? '--redirect-primary' : '--redirect-secondary';
     exec(
-        "mysqlsh --cluster $nodeSelectStr -h$host -u$user -p$password -P$port --js -e util.dumpInstance('$backupDir')",
+        "mysqlsh --cluster $nodeSelectStr -h$host -u$user -p$password -P$port --js -e \"util.dumpInstance('$backupDir')\"",
         $_,
         $returnCode
     );
@@ -401,7 +420,7 @@ function mysqlShellDumpRecover(string $backupDir, bool $resetProgress = false)
 
     $resetProgressStr = $resetProgress ? 'true' : 'false';
     exec(
-        "mysqlsh --cluster --redirect-primary -h$host -u$user -p$password -P$port --js -e util.dumpInstance('$backupDir', {'resetProgress': $resetProgressStr})",
+        "mysqlsh --cluster --redirect-primary -h$host -u$user -p$password -P$port --js -e \"util.dumpInstance('$backupDir', {'resetProgress': $resetProgressStr})\"",
         $_,
         $returnCode
     );
