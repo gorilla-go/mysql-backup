@@ -420,7 +420,7 @@ function mysqlShellDumpRecover(string $backupDir, bool $resetProgress = false)
 
     $resetProgressStr = $resetProgress ? 'true' : 'false';
     exec(
-        "mysqlsh --cluster --redirect-primary -h$host -u$user -p$password -P$port --js -e \"util.dumpInstance('$backupDir', {'resetProgress': $resetProgressStr})\"",
+        "mysqlsh --cluster --redirect-primary -h$host -u$user -p$password -P$port --js -e \"util.loadDump('$backupDir', {'resetProgress': $resetProgressStr})\"",
         $_,
         $returnCode
     );
