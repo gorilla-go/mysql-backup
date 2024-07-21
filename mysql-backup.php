@@ -25,6 +25,7 @@ const FULL_BACKUP_SUFFIX = 'full_backup';
 const INCREMENTAL_BACKUP_SUFFIX = 'inc_bak';
 const ACTION_DEFAULT = 'full';
 const MODE_DEFAULT = 'dump';
+const MYSQL_VERSION_LIMIT = '8.3.0';
 
 /**
  * @var \PDO|null $dbInstance
@@ -69,42 +70,20 @@ function getMysqlDbInstance(): PDO
  */
 function mysqlDump(string $backupDir, bool $fullBackup = false, bool $skipFullBackupUnReady = false, array $dumpExtra = [])
 {
-    // get mysql version
-    $db = getMysqlDbInstance();
-    $stmt = $db->query('SELECT VERSION()');
-    $version = $stmt->fetchColumn();
-    if (!$version) {
-        print("❌ Mysql connected fail.\n");
-    }
-
-    $stmt->closeCursor();
-    if (version_compare($version, '8.0.0', '<')) {
-        print("❌ MySQL version $version is not supported, please use MySQL 8.0 or higher\n");
-    }
-
     $backupDir = rtrim($backupDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
     if (!is_dir($backupDir) && mkdir($backupDir, 0755, true) && !is_dir($backupDir)) {
         print("❌ Could not create backup directory: $backupDir\n");
         exit(1);
     }
+    $versionLimit = MYSQL_VERSION_LIMIT;
 
     if ($fullBackup) {
         $backupFile = $backupDir . date('YmdHis') . '_' . FULL_BACKUP_SUFFIX . '.sql';
 
         // get mysqldump version
-        exec("mysqldump -V", $output, $returnCode);
-        if ($returnCode !== 0) {
-            print("❌ Invalid mysqldump version\n");
-            exit(1);
-        }
-        preg_match('/[0-9]\.[0-9]\.[0-9]+/', $output[0], $mysqldumpVersion);
-        if (empty($mysqldumpVersion)) {
-            print("❌ No found mysqldump version\n");
-            exit(1);
-        }
-        $mysqldumpVersion = $mysqldumpVersion[0];
-        if ($version !== $mysqldumpVersion) {
-            print("❌ mysqldump version is $mysqldumpVersion, but mysql version is $version\n");
+    
+        if (!versionCheck('mysqldump')) {
+            print("❌ mysqldump version must same as mysql server\n");
             exit(1);
         }
 
@@ -222,10 +201,14 @@ function mysqlDump(string $backupDir, bool $fullBackup = false, bool $skipFullBa
     $port = MYSQL_PORT;
     $user = MYSQL_USER;
     $pass = MYSQL_PASSWORD;
+    if (!versionCheck('mysqlbinlog')) {
+        print("❌ mysqlbinlog version must same as mysql server\n");
+        exit(1);
+    }
+
     foreach ($binlogFilesArr as $binlogFileForBackup) {
         $incBakFileName = $backupDir . date('YmdHis') . '_' . INCREMENTAL_BACKUP_SUFFIX . '.sql';
         $commonConnStr = "mysqlbinlog -h$host -P$port -u$user -p$pass %s $binlogFileForBackup > $incBakFileName";
-        
         $extraStr = ['--read-from-remote-server'];
 
         $isFirstBinlogFile = $binlogFileForBackup === $firstBinlogFile;
@@ -329,6 +312,12 @@ function recoverMysqlDump(string $backupDir)
     $password = MYSQL_PASSWORD;
     $host = MYSQL_HOST;
     $port = MYSQL_PORT;
+
+    if (!versionCheck('mysql')) {
+        print("❌ mysql tool version must same as mysql server.\n");
+        exit(1);
+    }
+
     exec(
         "mysql -u$user -p$password -h$host -P$port < $fullBackupName",
         $output,
@@ -382,6 +371,11 @@ function mysqlShellDump(string $backupDir, bool $primary = false)
     $host = MYSQL_HOST;
     $port = MYSQL_PORT;
 
+    if (!versionCheck('mysqlsh')) {
+        print("❌ mysqlsh version must same as mysql server\n");
+        exit(1);
+    }
+
     // clear dir.
     foreach(glob($backupDir . '*') ?: [] as $item) {
         if (is_dir($item)) {
@@ -417,6 +411,10 @@ function mysqlShellDumpRecover(string $backupDir, bool $resetProgress = false)
     $password = MYSQL_PASSWORD;
     $host = MYSQL_HOST;
     $port = MYSQL_PORT;
+    if (!versionCheck('mysqlsh')) {
+        print("❌ mysqlsh version must same as mysql server\n");
+        exit(1);
+    }
 
     $resetProgressStr = $resetProgress ? 'true' : 'false';
     exec(
@@ -432,6 +430,53 @@ function mysqlShellDumpRecover(string $backupDir, bool $resetProgress = false)
 
     print("✅ mysql shell recover succeed. \n");
     exit(0);
+}
+
+/**
+ * check tool the low version support. [mysqldump, mysqlbinlog, mysqlsh]
+ * @param string $tool
+ * @param string $supportVersion
+ * @return bool
+ */
+function versionCheck(string $tool): bool
+{
+    exec(
+        "$tool -V",
+        $output,
+        $returnCode
+    );
+    if ((int) $returnCode !== 0) {
+        printf("❌ Invalid tool name: %s", $tool);
+    }
+
+    preg_match('/[0-9]\.[0-9]\.[0-9]+/', $output[0], $version);
+    if (empty($version)) {
+        printf("❌ No found %s version\n", $tool);
+        exit(1);
+    }
+
+    $version = $version[0];
+    return $version === getMysqlVersion();
+}
+
+/**
+ * get mysql server version.
+ * @return string
+ */
+$mysqlVersion = null;
+function getMysqlVersion(): string
+{
+    global $mysqlVersion;
+    if ($mysqlVersion === null) {
+        $db = getMysqlDbInstance();
+        $stmt = $db->query('SELECT VERSION()');
+        $version = $stmt->fetchColumn();
+        if (!$version) {
+            print("❌ Mysql connected fail.\n");
+        }
+        $mysqlVersion = $version;
+    }
+    return $mysqlVersion;
 }
 
 function dumpHelp() {
@@ -523,6 +568,19 @@ if (
     $action = ACTION_DEFAULT;
 }
 
+/**
+ * connect mysql and check version
+ */
+$version = getMysqlVersion();
+$versionLimit = MYSQL_VERSION_LIMIT;
+if (version_compare($version, $versionLimit, '<')) {
+    printf("❌ Mysql version at least $versionLimit \n");
+    exit(1);
+}
+
+/**
+ * do action.
+ */
 $dir = $options['dir'] ?? null;
 if (!$dir || !is_dir($dir)) {
     printf("❌ Invalid backup directory: %s\n", $dir);
