@@ -95,7 +95,7 @@ function mysqlDump(string $backupDir, bool $fullBackup = false, bool $skipFullBa
         }
 
         $command = sprintf(
-            "mysqldump -u%s -p%s -h%s -P%s --single-transaction --quick --source-data=2 --all-databases > %s",
+            "mysqldump -u%s -p%s -h%s -P%s --output-as-version=SERVER --set-gtid-purged=AUTO --single-transaction --quick --source-data=2 --all-databases > %s",
             MYSQL_USER,
             MYSQL_PASSWORD,
             MYSQL_HOST,
